@@ -27,6 +27,7 @@ skip in publish := true
 lazy val rules = project.settings(
   moduleName := "sort-imports",
   libraryDependencies += "ch.epfl.scala" %% "scalafix-core" % V.scalafixVersion,
+  libraryDependencies += "com.lihaoyi" %% "pprint" % "0.5.6",
   pgpPublicRing := file("/tmp/public.asc"),
   pgpSecretRing := file("/tmp/secret.asc"),
   releaseEarlyWith := SonatypePublisher,

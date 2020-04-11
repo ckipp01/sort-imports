@@ -23,6 +23,7 @@ class SortImports(config: SortImportsConfig) extends SyntacticRule("SortImports"
 
   override def description: String =
     "Sorts imports and groups them based on configuration"
+
   override def isRewrite: Boolean = true
 
   override def withConfiguration(config: Configuration): Configured[Rule] =
@@ -51,25 +52,36 @@ class SortImports(config: SortImportsConfig) extends SyntacticRule("SortImports"
     val unsorted: ListBuffer[ListBuffer[Import]] = buf
       .filter(_.length > 0)
 
-    // Trailing comments
-    val comments: Map[Import, Option[Comment]] =
+    val trailingComments: Map[Import, Option[Comment]] =
       unsorted.flatten.map(x => (x -> doc.comments.trailing(x).headOption)).filterNot(_._2.isEmpty).toMap
+
+    val leadingComments: Map[Import, Option[Comment]] =
+      unsorted.flatten.map(x => (x -> doc.comments.leading(x).headOption)).filterNot(_._2.isEmpty).toMap
 
     // Remove all newlines within import groups
     val removeLinesPatch: ListBuffer[Patch] = unsorted.map { i =>
       doc.tokens.collect {
-        case e
-            if e.productPrefix == "LF"
-              && e.pos.start > i.head.pos.start
-              && e.pos.end < i.last.pos.end =>
-          e
+        case token
+            if token.productPrefix == "LF"
+              && token.pos.start > i.head.pos.start
+              && token.pos.end < i.last.pos.end =>
+          token
       }
     }.flatten
       .map(Patch.removeToken(_))
 
     // Remove comments and whitespace between imports and comments
-    val removeCommentsPatch: Iterable[Patch] = comments.values.flatten.map(Patch.removeToken _)
-    val removeCommentSpacesPatch: Iterable[Patch] = comments.flatMap {
+    val removeTrailingCommentsPatch: Iterable[Patch] = trailingComments.values.flatten.map(Patch.removeToken _)
+    val removeTrailingCommentSpacesPatch: Iterable[Patch] = trailingComments.flatMap {
+      case (k, v) =>
+        v.map { v =>
+          val num = v.pos.start - k.pos.end
+          ((0 to num).map { diff => new Token.Space(Input.None, v.dialect, k.pos.end + diff) }).toList
+        }.getOrElse(List.empty)
+    }.map(Patch.removeToken _)
+
+    val removeLeadingCommentsPatch: Iterable[Patch] = leadingComments.values.flatten.map(Patch.removeToken _)
+    val removeLeadingCommentSpacesPatch: Iterable[Patch] = leadingComments.flatMap {
       case (k, v) =>
         v.map { v =>
           val num = v.pos.start - k.pos.end
@@ -98,8 +110,15 @@ class SortImports(config: SortImportsConfig) extends SyntacticRule("SortImports"
           importsGrouped
             .find(_._1.getOrElse("*") == i) // If key is None, make key *
             .fold(acc) { found =>
-              val commentOrNot = comments.get(found._2.last).map(" " + _.mkString)
-              acc += (found._2.map(_.toString).init += (found._2.last.toString + commentOrNot.getOrElse("") + "\n"))
+              val commentOrNot  = trailingComments.get(found._2.last).map(" " + _.mkString)
+              val commentOrNot2 = leadingComments.get(found._2.last).map(_.mkString)
+              val leader = commentOrNot2 match {
+                case Some(value) => value
+                case None        => ""
+              }
+              acc += (found._2
+                .map(_.toString)
+                .init += (leader + found._2.last.toString + commentOrNot.getOrElse("") + "\n"))
             }
         }
         .flatten
@@ -120,6 +139,13 @@ class SortImports(config: SortImportsConfig) extends SyntacticRule("SortImports"
       } :+ Patch.replaceTree(el.last._1, el.last._2)
     }.flatten
 
-    List(patches, removeLinesPatch, removeCommentsPatch, removeCommentSpacesPatch).flatten.asPatch
+    List(
+      patches,
+      removeLinesPatch,
+      removeTrailingCommentsPatch,
+      removeLeadingCommentsPatch,
+      removeTrailingCommentSpacesPatch,
+      removeLeadingCommentSpacesPatch
+    ).flatten.asPatch
   }
 }
